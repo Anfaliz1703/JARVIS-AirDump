@@ -10,6 +10,7 @@ interface Props {
 }
 
 type SenderStatus = 'idle' | 'connecting' | 'connected' | 'sending' | 'done' | 'error';
+type MediaKind = 'photo' | 'video';
 
 function fileIdentity(file: File): string {
   return `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
@@ -29,17 +30,24 @@ function mergeUniqueFiles(current: File[], incoming: File[]): File[] {
   return merged;
 }
 
+function isVideo(file: File): boolean {
+  if (file.type.startsWith('video/')) return true;
+  return /\.(mov|mp4|m4v|avi|mkv|hevc)$/i.test(file.name);
+}
+
 export function Sender({ onBack }: Props) {
   const [sessionCode, setSessionCode] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<SenderStatus>('idle');
-  const [message, setMessage] = useState('Selecciona fotos y videos primero. Para lotes grandes puedes agregarlos en varias tandas.');
+  const [message, setMessage] = useState('Selecciona fotos o videos primero. Puedes agregarlos en varias tandas.');
   const [progress, setProgress] = useState<TransferProgress | null>(null);
   const peerRef = useRef<Peer | null>(null);
   const connectionRef = useRef<DataConnection | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const totalSize = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
+  const videoCount = useMemo(() => files.filter(isVideo).length, [files]);
+  const photoCount = files.length - videoCount;
   const overallPercent = progress ? formatPercent(progress.totalBytes, progress.totalSize) : 0;
 
   const connect = () => {
@@ -67,7 +75,7 @@ export function Sender({ onBack }: Props) {
         setMessage(
           files.length > 0
             ? `PC conectado. ${files.length.toLocaleString()} archivos listos para transferir.`
-            : 'PC conectado. Selecciona tus fotos y videos.'
+            : 'PC conectado. Selecciona tus fotos o videos.'
         );
       });
 
@@ -93,16 +101,20 @@ export function Sender({ onBack }: Props) {
     });
   };
 
-  const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelection = (kind: MediaKind) => (event: ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const selected = Array.from(input.files ?? []);
 
-    // Permite volver a abrir el selector y agregar más lotes, incluso si se repite
-    // accidentalmente la misma selección. Los duplicados se filtran abajo.
+    // Permite volver a abrir el selector y agregar más lotes. Limpiamos el input
+    // para que iOS dispare onChange incluso si se vuelve a elegir el mismo elemento.
     input.value = '';
 
     if (selected.length === 0) {
-      setMessage('iOS no entregó archivos en esta selección. Prueba un lote más pequeño.');
+      setMessage(
+        kind === 'video'
+          ? 'iOS no entregó videos en esta selección. Prueba con un solo video corto para diagnosticar.'
+          : 'iOS no entregó fotos en esta selección. Prueba un lote más pequeño.'
+      );
       return;
     }
 
@@ -119,11 +131,12 @@ export function Sender({ onBack }: Props) {
 
     const connectionIsOpen = Boolean(connectionRef.current?.open);
     const skippedText = skipped > 0 ? ` · ${skipped} repetidos omitidos` : '';
+    const mediaLabel = kind === 'video' ? 'videos' : 'fotos';
 
     setMessage(
       connectionIsOpen
-        ? `${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Puedes agregar otro lote o transferir.`
-        : `${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Puedes agregar otro lote y conectar al PC al final.`
+        ? `${added} ${mediaLabel} agregados · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}.`
+        : `${added} ${mediaLabel} agregados · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Conecta al PC cuando termines.`
     );
   };
 
@@ -132,8 +145,8 @@ export function Sender({ onBack }: Props) {
     setProgress(null);
     setMessage(
       connectionRef.current?.open
-        ? 'Selección vacía. El PC sigue conectado; selecciona fotos y videos.'
-        : 'Selección vacía. Selecciona fotos y videos primero.'
+        ? 'Selección vacía. El PC sigue conectado; selecciona fotos o videos.'
+        : 'Selección vacía. Selecciona fotos o videos primero.'
     );
   };
 
@@ -177,19 +190,30 @@ export function Sender({ onBack }: Props) {
         <label className="file-picker">
           <span className="mode-icon">＋</span>
           <span>
-            <strong>{files.length > 0 ? 'Agregar otro lote' : 'Seleccionar fotos y videos'}</strong>
-            <small>
-              {files.length > 0
-                ? 'Los nuevos archivos se suman sin borrar la selección anterior'
-                : 'En iPhone, para 100+ elementos usa tandas de 20–30 si hay videos'}
-            </small>
+            <strong>{photoCount > 0 ? 'Agregar más fotos' : 'Seleccionar fotos'}</strong>
+            <small>HEIC, JPEG, PNG y demás imágenes disponibles en iOS</small>
           </span>
           <input
             type="file"
-            accept="image/*,video/*"
+            accept="image/*"
             multiple
             disabled={status === 'connecting' || status === 'sending'}
-            onChange={handleFileSelection}
+            onChange={handleFileSelection('photo')}
+          />
+        </label>
+
+        <label className="file-picker">
+          <span className="mode-icon">▶</span>
+          <span>
+            <strong>{videoCount > 0 ? 'Agregar más videos' : 'Seleccionar videos'}</strong>
+            <small>Prueba primero con 1 video; luego agrega lotes pequeños</small>
+          </span>
+          <input
+            type="file"
+            accept="video/*"
+            multiple
+            disabled={status === 'connecting' || status === 'sending'}
+            onChange={handleFileSelection('video')}
           />
         </label>
 
@@ -198,6 +222,10 @@ export function Sender({ onBack }: Props) {
             <div className="selection-summary">
               <span><strong>{files.length.toLocaleString()}</strong><small>archivos acumulados</small></span>
               <span><strong>{formatBytes(totalSize)}</strong><small>seleccionados</small></span>
+            </div>
+            <div className="selection-summary">
+              <span><strong>{photoCount.toLocaleString()}</strong><small>fotos</small></span>
+              <span><strong>{videoCount.toLocaleString()}</strong><small>videos</small></span>
             </div>
             <button className="secondary-button" onClick={clearSelection} disabled={status === 'sending'}>
               Limpiar selección
@@ -256,7 +284,7 @@ export function Sender({ onBack }: Props) {
       </div>
 
       <p className="fine-print">
-        Para bibliotecas grandes en iPhone, arma primero la cola en varios lotes y conecta al PC cuando termines de seleccionar. No cierres Safari ni bloquees el iPhone durante la transferencia. AirDump no borra nada de Fotos.
+        En iPhone, los videos pueden tardar más en quedar disponibles si Fotos necesita descargar o preparar el original. Selecciona primero 1 video corto para validar. Luego arma la cola en lotes y conecta al PC al final. No cierres Safari ni bloquees el iPhone durante la transferencia.
       </p>
     </div>
   );
