@@ -105,14 +105,12 @@ export function Sender({ onBack }: Props) {
     const input = event.currentTarget;
     const selected = Array.from(input.files ?? []);
 
-    // Permite volver a abrir el selector y agregar más lotes. Limpiamos el input
-    // para que iOS dispare onChange incluso si se vuelve a elegir el mismo elemento.
     input.value = '';
 
     if (selected.length === 0) {
       setMessage(
         kind === 'video'
-          ? 'iOS no entregó videos en esta selección. Prueba con un solo video corto para diagnosticar.'
+          ? 'Safari abrió Fotos, pero no entregó el video a AirDump. Esto ocurre cuando iOS no logra preparar el archivo para una web.'
           : 'iOS no entregó fotos en esta selección. Prueba un lote más pequeño.'
       );
       return;
@@ -131,13 +129,21 @@ export function Sender({ onBack }: Props) {
 
     const connectionIsOpen = Boolean(connectionRef.current?.open);
     const skippedText = skipped > 0 ? ` · ${skipped} repetidos omitidos` : '';
-    const mediaLabel = kind === 'video' ? 'videos' : 'fotos';
+    const mediaLabel = kind === 'video' ? (added === 1 ? 'video' : 'videos') : (added === 1 ? 'foto' : 'fotos');
 
     setMessage(
       connectionIsOpen
-        ? `${added} ${mediaLabel} agregados · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}.`
-        : `${added} ${mediaLabel} agregados · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Conecta al PC cuando termines.`
+        ? `${added} ${mediaLabel} agregado${added === 1 ? '' : 's'} · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}.`
+        : `${added} ${mediaLabel} agregado${added === 1 ? '' : 's'} · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Conecta al PC cuando termines.`
     );
+  };
+
+  const handlePickerCancel = (kind: MediaKind) => () => {
+    if (kind === 'video') {
+      setMessage(
+        'Safari canceló la entrega del video aunque lo hayas marcado en Fotos. Suele ocurrir si iOS no puede crear la copia temporal del video o el original está pendiente de iCloud.'
+      );
+    }
   };
 
   const clearSelection = () => {
@@ -199,21 +205,22 @@ export function Sender({ onBack }: Props) {
             multiple
             disabled={status === 'connecting' || status === 'sending'}
             onChange={handleFileSelection('photo')}
+            onCancel={handlePickerCancel('photo')}
           />
         </label>
 
         <label className="file-picker">
           <span className="mode-icon">▶</span>
           <span>
-            <strong>{videoCount > 0 ? 'Agregar más videos' : 'Seleccionar videos'}</strong>
-            <small>Prueba primero con 1 video; luego agrega lotes pequeños</small>
+            <strong>{videoCount > 0 ? 'Agregar otro video' : 'Seleccionar un video'}</strong>
+            <small>Modo diagnóstico iPhone: 1 video por selección</small>
           </span>
           <input
             type="file"
-            accept="video/*"
-            multiple
+            accept="video/quicktime,video/mp4,.mov,.mp4,.m4v"
             disabled={status === 'connecting' || status === 'sending'}
             onChange={handleFileSelection('video')}
+            onCancel={handlePickerCancel('video')}
           />
         </label>
 
@@ -284,7 +291,7 @@ export function Sender({ onBack }: Props) {
       </div>
 
       <p className="fine-print">
-        En iPhone, los videos pueden tardar más en quedar disponibles si Fotos necesita descargar o preparar el original. Selecciona primero 1 video corto para validar. Luego arma la cola en lotes y conecta al PC al final. No cierres Safari ni bloquees el iPhone durante la transferencia.
+        En iPhone, Fotos debe preparar una copia temporal antes de entregar un video a una PWA. Si Safari devuelve “cancelado” aunque hayas pulsado Seleccionar, revisa el espacio libre del iPhone y si el original está descargado desde iCloud. AirDump nunca borra tus archivos.
       </p>
     </div>
   );
