@@ -11,11 +11,11 @@ export function Home({ onSelect }: Props) {
   return (
     <div className="view home-view">
       <div className="hero-copy">
-        <span className="eyebrow">TRANSFERENCIA LOCAL DE ALTA VELOCIDAD</span>
-        <h1>Vacía tu iPhone.<br />Sin nube. Sin cables.</h1>
+        <span className="eyebrow">TRANSFERENCIA LOCAL · PRIVADA · DIRECTA</span>
+        <h1>Tus archivos.<br />Al instante, cerca.</h1>
         <p>
-          Selecciona tus fotos y videos en el iPhone y envíalos directamente al PC o al SSD conectado al PC.
-          JARVIS AirDump no almacena tus archivos en servidores.
+          Pasa fotos y videos desde tu iPhone directamente al PC o al SSD conectado al PC.
+          Sin nube, sin recomprimir y sin cambiar el flujo de transferencia que ya probaste.
         </p>
       </div>
 
@@ -24,7 +24,7 @@ export function Home({ onSelect }: Props) {
           <span className="mode-icon">↑</span>
           <span className="mode-copy">
             <strong>Enviar desde iPhone</strong>
-            <small>Seleccionar fotos y videos</small>
+            <small>Selecciona tus fotos y videos y envíalos por Wi‑Fi</small>
           </span>
           <span className="arrow">›</span>
         </button>
@@ -33,15 +33,15 @@ export function Home({ onSelect }: Props) {
           <span className="mode-icon">↓</span>
           <span className="mode-copy">
             <strong>Recibir en este PC</strong>
-            <small>{canReceive ? 'Guardar directamente en PC o SSD' : 'Requiere Chrome o Edge en Windows'}</small>
+            <small>{canReceive ? 'Guarda directamente en una carpeta o SSD' : 'Requiere Chrome o Edge en Windows'}</small>
           </span>
           <span className="arrow">›</span>
         </button>
       </div>
 
       <div className="trust-row">
-        <span><i /> P2P por WebRTC</span>
-        <span><i /> Sin recomprimir</span>
+        <span><i /> WebRTC P2P</span>
+        <span><i /> Sin nube</span>
         <span><i /> No sobrescribe archivos</span>
       </div>
     </div>
