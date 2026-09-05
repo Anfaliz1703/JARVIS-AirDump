@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Peer, type DataConnection } from 'peerjs';
-import { pickDirectory, supportsDirectoryPicker, type DirectoryHandleLike } from '../lib/filesystem';
+import { ensureDirectoryWritable, pickDirectory, supportsDirectoryPicker, type DirectoryHandleLike } from '../lib/filesystem';
 import { formatBytes, formatPercent } from '../lib/format';
 import { attachReceiver, type ReceiverProgress } from '../lib/receiver';
 import { generateSessionCode, peerIdFromCode } from '../lib/session';
@@ -9,7 +9,7 @@ interface Props {
   onBack: () => void;
 }
 
-type ReceiverStatus = 'idle' | 'waiting' | 'connected' | 'receiving' | 'done' | 'error';
+type ReceiverStatus = 'idle' | 'authorizing' | 'waiting' | 'connected' | 'receiving' | 'done' | 'error';
 
 export function Receiver({ onBack }: Props) {
   const [directory, setDirectory] = useState<DirectoryHandleLike | null>(null);
@@ -32,7 +32,9 @@ export function Receiver({ onBack }: Props) {
     try {
       const handle = await pickDirectory();
       setDirectory(handle);
-      setMessage(`Destino listo: ${handle.name}`);
+      setSessionCode('');
+      setStatus('idle');
+      setMessage(`Destino seleccionado: ${handle.name}. Pulsa «Activar receptor» para validar escritura y generar el código.`);
     } catch (reason) {
       const error = reason instanceof Error ? reason : new Error(String(reason));
       if (error.name !== 'AbortError') {
@@ -42,15 +44,35 @@ export function Receiver({ onBack }: Props) {
     }
   };
 
-  const activateReceiver = () => {
+  const activateReceiver = async () => {
     if (!directory) return;
+
+    setStatus('authorizing');
+    setSessionCode('');
+    setMessage('Validando permiso de escritura en el destino…');
+
+    try {
+      // Esta llamada ocurre como consecuencia directa del clic «Activar receptor».
+      // Si Chrome necesita mostrar el prompt de escritura, dispone de user activation.
+      await ensureDirectoryWritable(directory);
+    } catch (reason) {
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      setStatus('error');
+      setMessage(error.message);
+      return;
+    }
+
     peerRef.current?.destroy();
+    connectionRef.current?.close();
+    detachReceiverRef.current?.();
+    detachReceiverRef.current = null;
+
     const code = generateSessionCode();
     const peer = new Peer(peerIdFromCode(code));
     peerRef.current = peer;
     setSessionCode(code);
     setStatus('waiting');
-    setMessage('Receptor activo. Introduce este código en el iPhone.');
+    setMessage('Destino autorizado. Receptor activo: introduce este código en el iPhone.');
 
     peer.on('open', () => setStatus('waiting'));
 
@@ -124,13 +146,17 @@ export function Receiver({ onBack }: Props) {
           <small>DESTINO</small>
           <strong>{directory?.name ?? 'Ninguna carpeta seleccionada'}</strong>
         </div>
-        <button className="secondary-button" onClick={selectDirectory} disabled={status === 'receiving'}>
+        <button className="secondary-button" onClick={selectDirectory} disabled={status === 'receiving' || status === 'authorizing'}>
           Elegir carpeta
         </button>
       </div>
 
-      <button className="action-button wide" onClick={activateReceiver} disabled={!directory || status === 'receiving'}>
-        {status === 'waiting' ? 'Generar otro código' : 'Activar receptor'}
+      <button
+        className="action-button wide"
+        onClick={activateReceiver}
+        disabled={!directory || status === 'receiving' || status === 'authorizing'}
+      >
+        {status === 'authorizing' ? 'Validando escritura…' : status === 'waiting' ? 'Generar otro código' : 'Activar receptor'}
       </button>
 
       {sessionCode && (
@@ -164,7 +190,7 @@ export function Receiver({ onBack }: Props) {
         </div>
       )}
 
-      <p className="fine-print">Si el destino ya contiene un archivo con el mismo nombre, AirDump crea una copia numerada en lugar de sobrescribirlo.</p>
+      <p className="fine-print">Al activar el receptor, AirDump valida una escritura real en la carpeta antes de generar el código. Si el destino ya contiene un archivo con el mismo nombre, crea una copia numerada en lugar de sobrescribirlo.</p>
     </div>
   );
 }
