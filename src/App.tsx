@@ -21,7 +21,7 @@ export default function App() {
               <small>AIRDUMP</small>
             </span>
           </button>
-          <span className="privacy-chip">P2P · SIN NUBE</span>
+          <span className="privacy-chip">LOCAL · SIN NUBE</span>
         </header>
 
         {mode === 'home' && <Home onSelect={setMode} />}
