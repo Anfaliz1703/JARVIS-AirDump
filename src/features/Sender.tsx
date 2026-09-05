@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Peer, type DataConnection } from 'peerjs';
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format';
 import { normalizeSessionCode, peerIdFromCode } from '../lib/session';
@@ -10,44 +10,18 @@ interface Props {
 }
 
 type SenderStatus = 'idle' | 'connecting' | 'connected' | 'sending' | 'done' | 'error';
-type MediaKind = 'photo' | 'video';
-
-function fileIdentity(file: File): string {
-  return `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
-}
-
-function mergeUniqueFiles(current: File[], incoming: File[]): File[] {
-  const seen = new Set(current.map(fileIdentity));
-  const merged = [...current];
-
-  for (const file of incoming) {
-    const key = fileIdentity(file);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(file);
-  }
-
-  return merged;
-}
-
-function isVideo(file: File): boolean {
-  if (file.type.startsWith('video/')) return true;
-  return /\.(mov|mp4|m4v|avi|mkv|hevc)$/i.test(file.name);
-}
 
 export function Sender({ onBack }: Props) {
   const [sessionCode, setSessionCode] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<SenderStatus>('idle');
-  const [message, setMessage] = useState('Selecciona fotos o videos primero. Puedes agregarlos en varias tandas.');
+  const [message, setMessage] = useState('Introduce el código que aparece en el PC.');
   const [progress, setProgress] = useState<TransferProgress | null>(null);
   const peerRef = useRef<Peer | null>(null);
   const connectionRef = useRef<DataConnection | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const totalSize = useMemo(() => files.reduce((sum, file) => sum + file.size, 0), [files]);
-  const videoCount = useMemo(() => files.filter(isVideo).length, [files]);
-  const photoCount = files.length - videoCount;
   const overallPercent = progress ? formatPercent(progress.totalBytes, progress.totalSize) : 0;
 
   const connect = () => {
@@ -72,21 +46,13 @@ export function Sender({ onBack }: Props) {
 
       connection.on('open', () => {
         setStatus('connected');
-        setMessage(
-          files.length > 0
-            ? `PC conectado. ${files.length.toLocaleString()} archivos listos para transferir.`
-            : 'PC conectado. Selecciona tus fotos o videos.'
-        );
+        setMessage('PC conectado. Selecciona tus fotos y videos.');
       });
 
       connection.on('close', () => {
-        connectionRef.current = null;
-        setStatus((current) => (current === 'done' ? current : 'idle'));
-        setMessage(
-          files.length > 0
-            ? 'La conexión con el PC se cerró, pero tu selección sigue lista. Pulsa Conectar de nuevo.'
-            : 'La conexión con el PC se cerró.'
-        );
+        if (status !== 'done') {
+          setMessage('La conexión con el PC se cerró.');
+        }
       });
 
       connection.on('error', (error) => {
@@ -99,61 +65,6 @@ export function Sender({ onBack }: Props) {
       setStatus('error');
       setMessage(error.message || 'No fue posible iniciar WebRTC.');
     });
-  };
-
-  const handleFileSelection = (kind: MediaKind) => (event: ChangeEvent<HTMLInputElement>) => {
-    const input = event.currentTarget;
-    const selected = Array.from(input.files ?? []);
-
-    input.value = '';
-
-    if (selected.length === 0) {
-      setMessage(
-        kind === 'video'
-          ? 'Safari abrió Fotos, pero no entregó el video a AirDump. Esto ocurre cuando iOS no logra preparar el archivo para una web.'
-          : 'iOS no entregó fotos en esta selección. Prueba un lote más pequeño.'
-      );
-      return;
-    }
-
-    const nextFiles = mergeUniqueFiles(files, selected);
-    const added = nextFiles.length - files.length;
-    const skipped = selected.length - added;
-
-    setFiles(nextFiles);
-    setProgress(null);
-
-    if (status === 'done') {
-      setStatus(connectionRef.current?.open ? 'connected' : 'idle');
-    }
-
-    const connectionIsOpen = Boolean(connectionRef.current?.open);
-    const skippedText = skipped > 0 ? ` · ${skipped} repetidos omitidos` : '';
-    const mediaLabel = kind === 'video' ? (added === 1 ? 'video' : 'videos') : (added === 1 ? 'foto' : 'fotos');
-
-    setMessage(
-      connectionIsOpen
-        ? `${added} ${mediaLabel} agregado${added === 1 ? '' : 's'} · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}.`
-        : `${added} ${mediaLabel} agregado${added === 1 ? '' : 's'} · ${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Conecta al PC cuando termines.`
-    );
-  };
-
-  const handlePickerCancel = (kind: MediaKind) => () => {
-    if (kind === 'video') {
-      setMessage(
-        'Safari canceló la entrega del video aunque lo hayas marcado en Fotos. Suele ocurrir si iOS no puede crear la copia temporal del video o el original está pendiente de iCloud.'
-      );
-    }
-  };
-
-  const clearSelection = () => {
-    setFiles([]);
-    setProgress(null);
-    setMessage(
-      connectionRef.current?.open
-        ? 'Selección vacía. El PC sigue conectado; selecciona fotos o videos.'
-        : 'Selección vacía. Selecciona fotos o videos primero.'
-    );
   };
 
   const startTransfer = async () => {
@@ -173,13 +84,8 @@ export function Sender({ onBack }: Props) {
       setMessage('Transferencia completada y tamaño verificado por el PC. Ya puedes revisar el destino.');
     } catch (reason) {
       const error = reason instanceof Error ? reason : new Error(String(reason));
-      const stillConnected = Boolean(connectionRef.current?.open);
-      setStatus(error.name === 'AbortError' && stillConnected ? 'connected' : 'error');
-      setMessage(
-        error.name === 'AbortError'
-          ? 'Transferencia cancelada. La selección permanece disponible.'
-          : `${error.message} La selección permanece disponible para reintentar.`
-      );
+      setStatus(error.name === 'AbortError' ? 'connected' : 'error');
+      setMessage(error.name === 'AbortError' ? 'Transferencia cancelada.' : error.message);
     }
   };
 
@@ -188,58 +94,9 @@ export function Sender({ onBack }: Props) {
   return (
     <div className="view">
       <button className="back-button" onClick={onBack}>← Inicio</button>
-      <span className="eyebrow">MODO EMISOR · IPHONE</span>
+      <span className="eyebrow">MODO EMISOR · IPHONE · ESTABLE</span>
       <h2>Enviar biblioteca seleccionada</h2>
       <p className="status-line">{message}</p>
-
-      <div className={`stack-card ${status === 'connecting' || status === 'sending' ? 'muted-card' : ''}`}>
-        <label className="file-picker">
-          <span className="mode-icon">＋</span>
-          <span>
-            <strong>{photoCount > 0 ? 'Agregar más fotos' : 'Seleccionar fotos'}</strong>
-            <small>HEIC, JPEG, PNG y demás imágenes disponibles en iOS</small>
-          </span>
-          <input
-            type="file"
-            accept="image/*"
-            multiple
-            disabled={status === 'connecting' || status === 'sending'}
-            onChange={handleFileSelection('photo')}
-            onCancel={handlePickerCancel('photo')}
-          />
-        </label>
-
-        <label className="file-picker">
-          <span className="mode-icon">▶</span>
-          <span>
-            <strong>{videoCount > 0 ? 'Agregar otro video' : 'Seleccionar un video'}</strong>
-            <small>Modo diagnóstico iPhone: 1 video por selección</small>
-          </span>
-          <input
-            type="file"
-            accept="video/quicktime,video/mp4,.mov,.mp4,.m4v"
-            disabled={status === 'connecting' || status === 'sending'}
-            onChange={handleFileSelection('video')}
-            onCancel={handlePickerCancel('video')}
-          />
-        </label>
-
-        {files.length > 0 && (
-          <>
-            <div className="selection-summary">
-              <span><strong>{files.length.toLocaleString()}</strong><small>archivos acumulados</small></span>
-              <span><strong>{formatBytes(totalSize)}</strong><small>seleccionados</small></span>
-            </div>
-            <div className="selection-summary">
-              <span><strong>{photoCount.toLocaleString()}</strong><small>fotos</small></span>
-              <span><strong>{videoCount.toLocaleString()}</strong><small>videos</small></span>
-            </div>
-            <button className="secondary-button" onClick={clearSelection} disabled={status === 'sending'}>
-              Limpiar selección
-            </button>
-          </>
-        )}
-      </div>
 
       <div className="stack-card">
         <label className="field-label" htmlFor="session-code">Código del PC</label>
@@ -255,9 +112,40 @@ export function Sender({ onBack }: Props) {
             disabled={status === 'connecting' || status === 'sending'}
           />
           <button className="action-button" onClick={connect} disabled={status === 'connecting' || status === 'sending'}>
-            {status === 'connecting' ? 'Conectando…' : status === 'connected' ? 'Reconectar' : 'Conectar'}
+            {status === 'connecting' ? 'Conectando…' : 'Conectar'}
           </button>
         </div>
+      </div>
+
+      <div className={`stack-card ${status === 'idle' || status === 'connecting' ? 'muted-card' : ''}`}>
+        <label className="file-picker">
+          <span className="mode-icon">＋</span>
+          <span>
+            <strong>Seleccionar fotos y videos</strong>
+            <small>Selector compatible que ya funcionó en la prueba física</small>
+          </span>
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            disabled={status === 'idle' || status === 'connecting' || status === 'sending'}
+            onChange={(event) => {
+              const selected = Array.from(event.target.files ?? []);
+              setFiles(selected);
+              setProgress(null);
+              if (selected.length > 0) {
+                setMessage(`${selected.length.toLocaleString()} archivos listos para transferir.`);
+              }
+            }}
+          />
+        </label>
+
+        {files.length > 0 && (
+          <div className="selection-summary">
+            <span><strong>{files.length.toLocaleString()}</strong><small>archivos</small></span>
+            <span><strong>{formatBytes(totalSize)}</strong><small>seleccionados</small></span>
+          </div>
+        )}
       </div>
 
       {(status === 'sending' || status === 'done') && progress && (
@@ -290,9 +178,7 @@ export function Sender({ onBack }: Props) {
         )}
       </div>
 
-      <p className="fine-print">
-        En iPhone, Fotos debe preparar una copia temporal antes de entregar un video a una PWA. Si Safari devuelve “cancelado” aunque hayas pulsado Seleccionar, revisa el espacio libre del iPhone y si el original está descargado desde iCloud. AirDump nunca borra tus archivos.
-      </p>
+      <p className="fine-print">Primero recuperamos el flujo estable. Prueba inicialmente con 1 foto y luego con 6, igual que en la prueba que funcionó. No cierres Safari ni bloquees el iPhone durante la transferencia.</p>
     </div>
   );
 }
