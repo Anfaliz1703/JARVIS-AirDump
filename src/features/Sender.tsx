@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { Peer, type DataConnection } from 'peerjs';
 import { formatBytes, formatPercent, formatSpeed } from '../lib/format';
 import { normalizeSessionCode, peerIdFromCode } from '../lib/session';
@@ -11,11 +11,29 @@ interface Props {
 
 type SenderStatus = 'idle' | 'connecting' | 'connected' | 'sending' | 'done' | 'error';
 
+function fileIdentity(file: File): string {
+  return `${file.name}\u0000${file.size}\u0000${file.lastModified}\u0000${file.type}`;
+}
+
+function mergeUniqueFiles(current: File[], incoming: File[]): File[] {
+  const seen = new Set(current.map(fileIdentity));
+  const merged = [...current];
+
+  for (const file of incoming) {
+    const key = fileIdentity(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(file);
+  }
+
+  return merged;
+}
+
 export function Sender({ onBack }: Props) {
   const [sessionCode, setSessionCode] = useState('');
   const [files, setFiles] = useState<File[]>([]);
   const [status, setStatus] = useState<SenderStatus>('idle');
-  const [message, setMessage] = useState('Introduce el código que aparece en el PC.');
+  const [message, setMessage] = useState('Selecciona fotos y videos primero. Para lotes grandes puedes agregarlos en varias tandas.');
   const [progress, setProgress] = useState<TransferProgress | null>(null);
   const peerRef = useRef<Peer | null>(null);
   const connectionRef = useRef<DataConnection | null>(null);
@@ -46,13 +64,21 @@ export function Sender({ onBack }: Props) {
 
       connection.on('open', () => {
         setStatus('connected');
-        setMessage('PC conectado. Selecciona tus fotos y videos.');
+        setMessage(
+          files.length > 0
+            ? `PC conectado. ${files.length.toLocaleString()} archivos listos para transferir.`
+            : 'PC conectado. Selecciona tus fotos y videos.'
+        );
       });
 
       connection.on('close', () => {
-        if (status !== 'done') {
-          setMessage('La conexión con el PC se cerró.');
-        }
+        connectionRef.current = null;
+        setStatus((current) => (current === 'done' ? current : 'idle'));
+        setMessage(
+          files.length > 0
+            ? 'La conexión con el PC se cerró, pero tu selección sigue lista. Pulsa Conectar de nuevo.'
+            : 'La conexión con el PC se cerró.'
+        );
       });
 
       connection.on('error', (error) => {
@@ -65,6 +91,50 @@ export function Sender({ onBack }: Props) {
       setStatus('error');
       setMessage(error.message || 'No fue posible iniciar WebRTC.');
     });
+  };
+
+  const handleFileSelection = (event: ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const selected = Array.from(input.files ?? []);
+
+    // Permite volver a abrir el selector y agregar más lotes, incluso si se repite
+    // accidentalmente la misma selección. Los duplicados se filtran abajo.
+    input.value = '';
+
+    if (selected.length === 0) {
+      setMessage('iOS no entregó archivos en esta selección. Prueba un lote más pequeño.');
+      return;
+    }
+
+    const nextFiles = mergeUniqueFiles(files, selected);
+    const added = nextFiles.length - files.length;
+    const skipped = selected.length - added;
+
+    setFiles(nextFiles);
+    setProgress(null);
+
+    if (status === 'done') {
+      setStatus(connectionRef.current?.open ? 'connected' : 'idle');
+    }
+
+    const connectionIsOpen = Boolean(connectionRef.current?.open);
+    const skippedText = skipped > 0 ? ` · ${skipped} repetidos omitidos` : '';
+
+    setMessage(
+      connectionIsOpen
+        ? `${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Puedes agregar otro lote o transferir.`
+        : `${nextFiles.length.toLocaleString()} archivos listos${skippedText}. Puedes agregar otro lote y conectar al PC al final.`
+    );
+  };
+
+  const clearSelection = () => {
+    setFiles([]);
+    setProgress(null);
+    setMessage(
+      connectionRef.current?.open
+        ? 'Selección vacía. El PC sigue conectado; selecciona fotos y videos.'
+        : 'Selección vacía. Selecciona fotos y videos primero.'
+    );
   };
 
   const startTransfer = async () => {
@@ -84,8 +154,13 @@ export function Sender({ onBack }: Props) {
       setMessage('Transferencia completada y tamaño verificado por el PC. Ya puedes revisar el destino.');
     } catch (reason) {
       const error = reason instanceof Error ? reason : new Error(String(reason));
-      setStatus(error.name === 'AbortError' ? 'connected' : 'error');
-      setMessage(error.name === 'AbortError' ? 'Transferencia cancelada.' : error.message);
+      const stillConnected = Boolean(connectionRef.current?.open);
+      setStatus(error.name === 'AbortError' && stillConnected ? 'connected' : 'error');
+      setMessage(
+        error.name === 'AbortError'
+          ? 'Transferencia cancelada. La selección permanece disponible.'
+          : `${error.message} La selección permanece disponible para reintentar.`
+      );
     }
   };
 
@@ -97,6 +172,39 @@ export function Sender({ onBack }: Props) {
       <span className="eyebrow">MODO EMISOR · IPHONE</span>
       <h2>Enviar biblioteca seleccionada</h2>
       <p className="status-line">{message}</p>
+
+      <div className={`stack-card ${status === 'connecting' || status === 'sending' ? 'muted-card' : ''}`}>
+        <label className="file-picker">
+          <span className="mode-icon">＋</span>
+          <span>
+            <strong>{files.length > 0 ? 'Agregar otro lote' : 'Seleccionar fotos y videos'}</strong>
+            <small>
+              {files.length > 0
+                ? 'Los nuevos archivos se suman sin borrar la selección anterior'
+                : 'En iPhone, para 100+ elementos usa tandas de 20–30 si hay videos'}
+            </small>
+          </span>
+          <input
+            type="file"
+            accept="image/*,video/*"
+            multiple
+            disabled={status === 'connecting' || status === 'sending'}
+            onChange={handleFileSelection}
+          />
+        </label>
+
+        {files.length > 0 && (
+          <>
+            <div className="selection-summary">
+              <span><strong>{files.length.toLocaleString()}</strong><small>archivos acumulados</small></span>
+              <span><strong>{formatBytes(totalSize)}</strong><small>seleccionados</small></span>
+            </div>
+            <button className="secondary-button" onClick={clearSelection} disabled={status === 'sending'}>
+              Limpiar selección
+            </button>
+          </>
+        )}
+      </div>
 
       <div className="stack-card">
         <label className="field-label" htmlFor="session-code">Código del PC</label>
@@ -112,33 +220,9 @@ export function Sender({ onBack }: Props) {
             disabled={status === 'connecting' || status === 'sending'}
           />
           <button className="action-button" onClick={connect} disabled={status === 'connecting' || status === 'sending'}>
-            {status === 'connecting' ? 'Conectando…' : 'Conectar'}
+            {status === 'connecting' ? 'Conectando…' : status === 'connected' ? 'Reconectar' : 'Conectar'}
           </button>
         </div>
-      </div>
-
-      <div className={`stack-card ${status === 'idle' || status === 'connecting' ? 'muted-card' : ''}`}>
-        <label className="file-picker">
-          <span className="mode-icon">＋</span>
-          <span>
-            <strong>Seleccionar fotos y videos</strong>
-            <small>Se abrirá el selector de iOS</small>
-          </span>
-          <input
-            type="file"
-            accept="image/*,video/*"
-            multiple
-            disabled={status === 'idle' || status === 'connecting' || status === 'sending'}
-            onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-          />
-        </label>
-
-        {files.length > 0 && (
-          <div className="selection-summary">
-            <span><strong>{files.length.toLocaleString()}</strong><small>archivos</small></span>
-            <span><strong>{formatBytes(totalSize)}</strong><small>seleccionados</small></span>
-          </div>
-        )}
       </div>
 
       {(status === 'sending' || status === 'done') && progress && (
@@ -171,7 +255,9 @@ export function Sender({ onBack }: Props) {
         )}
       </div>
 
-      <p className="fine-print">No cierres Safari ni bloquees el iPhone durante una transferencia grande. AirDump no borra nada de Fotos.</p>
+      <p className="fine-print">
+        Para bibliotecas grandes en iPhone, arma primero la cola en varios lotes y conecta al PC cuando termines de seleccionar. No cierres Safari ni bloquees el iPhone durante la transferencia. AirDump no borra nada de Fotos.
+      </p>
     </div>
   );
 }
